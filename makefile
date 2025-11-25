@@ -49,8 +49,11 @@ run-server: $(APP_SERVER)
 	  echo "🚀 Running $(APP_SERVER)"; \
 	  ./$(APP_SERVER); \
 	elif [ $$# -eq 1 ]; then \
-	  echo "🚀 Running $(APP_SERVER) → $$1"; \
-	  ./$(APP_SERVER) "$$1"; \
+	  case "$$1" in \
+	    *:*) echo "🚀 Running $(APP_SERVER) → $$1"; ./$(APP_SERVER) "$$1" ;; \
+	    *[!0-9]*) echo "🚀 Running $(APP_SERVER) → $$1"; ./$(APP_SERVER) "$$1" ;; \
+	    *) echo "🚀 Running $(APP_SERVER) → 127.0.0.1:$$1"; ./$(APP_SERVER) "127.0.0.1" "$$1" ;; \
+	  esac; \
 	else \
 	  echo "🚀 Running $(APP_SERVER) → $$1:$$2"; \
 	  ./$(APP_SERVER) "$$1" "$$2"; \

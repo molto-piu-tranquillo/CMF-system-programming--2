@@ -127,6 +127,16 @@ int main(int argc, char *argv[])
             if (p > 0)
                 port = p;
         }
+        else
+        {
+            char *endptr = NULL;
+            long p = strtol(host, &endptr, 10);
+            if (endptr && *endptr == '\0' && p > 0)
+            {
+                port = (int)p; // 단일 숫자 인자가 들어오면 포트로 간주
+                strcpy(host, "127.0.0.1");
+            }
+        }
     }
 
     int serv_sock;
