@@ -41,7 +41,7 @@ $(APP_SERVER): $(OBJS_SERVER)
 # ==========================
 #   실행 명령
 # ==========================
-ARGS := $(filter-out $@,$(MAKECMDGOALS))
+ARGS = $(filter-out $@,$(MAKECMDGOALS))
 
 run-server: $(APP_SERVER)
 	@set -- $(ARGS); \
@@ -59,7 +59,7 @@ run-server: $(APP_SERVER)
 	  ./$(APP_SERVER) "$$1" "$$2"; \
 	fi
 
-ARGS := $(filter-out $@,$(MAKECMDGOALS))
+ARGS = $(filter-out $@,$(MAKECMDGOALS))
 
 run-client: $(APP_CLIENT)
 	@set -- $(ARGS); \
