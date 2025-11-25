@@ -22,5 +22,6 @@ typedef enum {
 void hash_password(const char *password, char out_hex[65]);
 AuthResult verify_credentials(const char *user, const char *provided_hash, int *out_permission_level, int *out_remaining_attempts);
 bool get_user_info(const char *user, UserAccount *out);
+bool auth_init(void);
 
 #endif

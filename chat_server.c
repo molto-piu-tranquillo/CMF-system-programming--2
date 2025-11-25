@@ -85,6 +85,7 @@ static void handle_command(ClientSlot *slot, const char *buf, const char *client
             slot->authenticated = true;
             snprintf(slot->username, sizeof(slot->username), "%s", user);
             slot->permission_level = perm;
+            printf("👤 User logged in: %s (%s:%d)\n", user, client_ip, client_port);
             send(slot->sock, "OK: login successful\n", strlen("OK: login successful\n"), 0);
         }
         else if (res == AUTH_LOCKED)
@@ -196,6 +197,11 @@ int main(int argc, char *argv[])
     // 호스트는 로컬 루프백으로, 포트는 5050으로 기본경로를 설정
     char host[256] = "127.0.0.1";
     int port = 5050;
+
+    if (!auth_init())
+    {
+        fprintf(stderr, "[WARN] Failed to initialize authentication state.\n");
+    }
 
     // 그 외에 다른 호스트 주소랑 포트를 사용자가 입력했다면, 그 주소:포트로 기본경로 덮어쓰기
     if (argc >= 3)
