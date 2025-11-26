@@ -129,11 +129,29 @@ static void handle_command(ClientSlot *slot, const char *buf, const char *client
     }
     else if (strncmp(buf, "ls", 2) == 0)
     {
+        // [수정됨] ls 처리 및 ENDLS 마커 전송 로직
         char tmpbuf[1024];
         FILE *fp = popen("ls -al", "r");
-        while (fgets(tmpbuf, sizeof(tmpbuf), fp))
-            send(slot->sock, tmpbuf, strlen(tmpbuf), 0);
-        pclose(fp);
+        
+        if (!fp)
+        {
+            // popen 실패 시
+            const char *err = "ERR: ls failed\n";
+            send(slot->sock, err, strlen(err), 0);
+        }
+        else
+        {
+            // 실행 결과 전송
+            while (fgets(tmpbuf, sizeof(tmpbuf), fp))
+            {
+                send(slot->sock, tmpbuf, strlen(tmpbuf), 0);
+            }
+            pclose(fp);
+        }
+        
+        // [중요] 클라이언트가 대기 중인 종료 마커 전송
+        const char *end = "ENDLS\n";
+        send(slot->sock, end, strlen(end), 0);
     }
     else
     {
@@ -205,7 +223,7 @@ int main(int argc, char *argv[])
 
     // 그 외에 다른 호스트 주소랑 포트를 사용자가 입력했다면, 그 주소:포트로 기본경로 덮어쓰기
     if (argc >= 3)
-    { // 인자가 3개 이하(예 make run-client 127.0.0.1 9190) -> 형식: host port
+    { 
         strncpy(host, argv[1], sizeof(host) - 1);
         host[sizeof(host) - 1] = '\0';
         int p = atoi(argv[2]);
@@ -213,7 +231,7 @@ int main(int argc, char *argv[])
             port = p;
     }
     else if (argc >= 2)
-    { // 인자가 2개 이하 -> 즉, host[:port] 처럼 호스트, 포트 붙여 보내거나 호스트 ip만 보낼 때
+    { 
         strncpy(host, argv[1], sizeof(host) - 1);
         host[sizeof(host) - 1] = '\0';
         char *colon = strrchr(host, ':');
@@ -243,9 +261,12 @@ int main(int argc, char *argv[])
     struct sockaddr_in clnt_addr;
     socklen_t clnt_addr_size;
 
-    // ✅ 서버 시작 시 자동으로 /home 디렉토리로 이동
-    (void)chdir("/home"); // 반환값 무시
-    printf("📁 Server base directory: /home\n");
+    // [수정됨] ✅ 서버 시작 시 /home 이동 제거 (현재 디렉토리 유지)
+    // (void)chdir("/home"); 
+    char cwd[1024];
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        printf("📁 Server running at: %s\n", cwd);
+    }
 
     /* 서버 소켓(리스닝 소켓) 생성 */
     serv_sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -259,7 +280,6 @@ int main(int argc, char *argv[])
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    // serv_addr.sin_port = htons(atoi(argv[1]));
     serv_addr.sin_port = htons(port);
 
     /* 주소 정보 할당 */

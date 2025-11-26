@@ -8,6 +8,12 @@
 #include <stdio.h>
 #include <strings.h>
 
+// 1. 프로토콜 정의: 서버가 ls 끝에 이 마커를 보내야 함
+#define LS_END_MARKER "ENDLS\n"
+
+/* ============================================================
+   벡터 유틸 (동적 배열 관리)
+   ============================================================ */
 static void vec_push(char ***arr, int *count, int *cap, const char *s)
 {
     if (*count + 1 > *cap)
@@ -27,14 +33,51 @@ static int cmp_str(const void *a, const void *b)
 }
 
 /* ============================================================
-   공통: 서버 연결 감지 함수
+   공통: 소켓 유틸 및 데이터 수신 함수
    ============================================================ */
-extern int socket_is_connected(void); // socket_client.c에 구현 필요
+extern int sockfd; // socket_client.c에 정의된 변수 참조
+
+int socket_is_connected(void)
+{
+    return (sockfd >= 0);
+}
+
+// 2. 개선된 수신 함수: 마커가 나올 때까지 데이터를 모두 받음 (잘림 방지)
+static void recv_ls_all(char *recvbuf, size_t bufsize)
+{
+    recvbuf[0] = '\0';
+    char chunk[4096];
+
+    for (;;)
+    {
+        // 소켓에서 조금씩 읽어옴
+        int n = socket_recv_response(chunk, sizeof(chunk));
+        if (n <= 0)
+            break;
+
+        // 버퍼 오버플로우 방지
+        if (strlen(recvbuf) + (size_t)n + 1 >= bufsize)
+        {
+            strncat(recvbuf, chunk, bufsize - strlen(recvbuf) - 1);
+            break;
+        }
+
+        strncat(recvbuf, chunk, bufsize - strlen(recvbuf) - 1);
+
+        // 종료 마커("ENDLS")가 포함되어 있으면 수신 중단
+        if (strstr(recvbuf, LS_END_MARKER))
+            break;
+    }
+
+    // 마커 부분은 데이터에서 제거 (화면에 출력되지 않게)
+    char *p = strstr(recvbuf, LS_END_MARKER);
+    if (p)
+        *p = '\0';
+}
 
 /* ============================================================
-   상단: 현재 위치의 디렉토리 목록
+   상단: 디렉토리 목록 (dirlist)
    ============================================================ */
-
 void dirlist_init(DirList *dl)
 {
     memset(dl, 0, sizeof(*dl));
@@ -57,56 +100,35 @@ void dirlist_scan(DirList *dl, const char *cwd_abs)
 
     if (socket_is_connected())
     {
-        // 🌐 서버에 요청: 원격에서도 실제 경로를 맞춰주기 위해 cd 후 ls 수행
-        char cd_cmd[PATH_MAX + 4];
-        snprintf(cd_cmd, sizeof(cd_cmd), "cd %s", cwd_abs);
-        socket_send_cmd(cd_cmd);
-
-        // cd 결과는 단순 확인만 하고 무시(OK/ERR 문구만 받아서 비워줌)
-        char cd_resp[512];
-        while (1)
-        {
-            int rn = socket_recv_response(cd_resp, sizeof(cd_resp));
-            if (rn <= 0)
-                break;
-            cd_resp[rn] = '\0';
-            if (strstr(cd_resp, "OK") || strstr(cd_resp, "ERR"))
-                break;
-        }
-
-        // 경로가 맞춰진 상태에서 디렉터리 목록 조회
+        // 3. 최적화: 불필요한 'cd' 명령 제거하고 바로 'ls' 요청
         socket_send_cmd("ls -al");
-        char buf[4096] = {0}, recvbuf[8192] = {0};
-        while (1)
-        {
-            int n = socket_recv_response(buf, sizeof(buf));
-            if (n <= 0)
-                break;
-            buf[n] = '\0';
-            strncat(recvbuf, buf, sizeof(recvbuf) - strlen(recvbuf) - 1);
-            if (n < (int)sizeof(buf) - 1)
-                break;
-        }
 
-        // 서버에서 받은 결과 파싱
+        // 4. 대용량 버퍼로 전체 데이터 수신
+        char recvbuf[16384];
+        recv_ls_all(recvbuf, sizeof(recvbuf));
+
+        // 파싱
         char *line = strtok(recvbuf, "\n");
         while (line)
         {
+            // 'd'로 시작하는 라인 (디렉토리)
             if (line[0] == 'd')
-            { // 디렉토리만 표시
+            {
+                char perms[11];
                 char name[256];
-                if (sscanf(line, "%*s %*s %*s %*s %*s %*s %*s %*s %255s", name) == 1)
+
+                // 5. 정교한 파싱: 권한 문자열과 파일명 추출
+                // 예: drwxr-xr-x ... filename
+                if (sscanf(line, "%10s %*s %*s %*s %*s %*s %*s %*s %255s",
+                           perms, name) == 2)
                 {
+                    // . 과 .. 은 제외
                     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
                     {
                         line = strtok(NULL, "\n");
                         continue;
                     }
-
-                    // 서버 기준 절대경로를 넣어 탐색 시 경로가 꼬이지 않게 함
-                    char abs[PATH_MAX];
-                    path_join(abs, cwd_abs, name);
-                    vec_push(&dl->items, &dl->count, &dl->cap, abs);
+                    vec_push(&dl->items, &dl->count, &dl->cap, name);
                 }
             }
             line = strtok(NULL, "\n");
@@ -114,15 +136,15 @@ void dirlist_scan(DirList *dl, const char *cwd_abs)
     }
     else
     {
-        // 📁 로컬 탐색 모드
+        // 로컬 모드
         DIR *d = opendir(cwd_abs);
-        if (!d)
-            return;
+        if (!d) return;
         struct dirent *e;
         while ((e = readdir(d)))
         {
             if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
                 continue;
+            
             char p[PATH_MAX];
             path_join(p, cwd_abs, e->d_name);
             if (is_directory(p))
@@ -146,19 +168,16 @@ void dirlist_draw(WINDOW *win, const DirList *dl, bool focused)
     {
         const char *name = dl->items[i];
         int sel = (i == dl->selected);
-        if (sel && focused)
-            wattron(win, A_REVERSE);
+        if (sel && focused) wattron(win, A_REVERSE);
         mvwprintw(win, i + 1, 2, "%c %.*s", sel ? '>' : ' ', w - 4, name);
-        if (sel && focused)
-            wattroff(win, A_REVERSE);
+        if (sel && focused) wattroff(win, A_REVERSE);
     }
     wrefresh(win);
 }
 
 /* ============================================================
-   하단: 선택 디렉토리의 하위 파일/폴더 목록
+   하단: 파일 목록 (filelist)
    ============================================================ */
-
 void filelist_init(FileList *fl)
 {
     memset(fl, 0, sizeof(*fl));
@@ -181,51 +200,34 @@ void filelist_scan(FileList *fl, const char *dir_abs)
 
     if (socket_is_connected())
     {
-        // 🌐 서버에 요청: 디렉터리 이동 후 파일 목록 조회
-        char cd_cmd[PATH_MAX + 4];
-        snprintf(cd_cmd, sizeof(cd_cmd), "cd %s", dir_abs);
-        socket_send_cmd(cd_cmd);
-
-        char cd_resp[512];
-        while (1)
-        {
-            int rn = socket_recv_response(cd_resp, sizeof(cd_resp));
-            if (rn <= 0)
-                break;
-            cd_resp[rn] = '\0';
-            if (strstr(cd_resp, "OK") || strstr(cd_resp, "ERR"))
-                break;
-        }
-
+        // 서버 요청
         socket_send_cmd("ls -al");
-        char buf[4096] = {0}, recvbuf[8192] = {0};
-        while (1)
-        {
-            int n = socket_recv_response(buf, sizeof(buf));
-            if (n <= 0)
-                break;
-            buf[n] = '\0';
-            strncat(recvbuf, buf, sizeof(recvbuf) - strlen(recvbuf) - 1);
-            if (n < (int)sizeof(buf) - 1)
-                break;
-        }
+
+        char recvbuf[16384];
+        recv_ls_all(recvbuf, sizeof(recvbuf));
+
         char *line = strtok(recvbuf, "\n");
         while (line)
         {
+            // '-'로 시작하는 라인 (일반 파일)
             if (line[0] == '-')
-            { // 일반 파일만
+            {
+                char perms[11];
                 char name[256];
-                if (sscanf(line, "%*s %*s %*s %*s %*s %*s %*s %*s %255s", name) == 1)
+                if (sscanf(line, "%10s %*s %*s %*s %*s %*s %*s %*s %255s",
+                           perms, name) == 2)
+                {
                     vec_push(&fl->items, &fl->count, &fl->cap, name);
+                }
             }
             line = strtok(NULL, "\n");
         }
     }
     else
     {
+        // 로컬 모드
         DIR *d = opendir(dir_abs);
-        if (!d)
-            return;
+        if (!d) return;
         struct dirent *e;
         while ((e = readdir(d)))
         {
@@ -251,16 +253,9 @@ void filelist_draw(WINDOW *win, const FileList *fl, bool focused)
     {
         const char *name = fl->items[i];
         int sel = (i == fl->selected);
-        if (sel && focused)
-            wattron(win, A_REVERSE);
+        if (sel && focused) wattron(win, A_REVERSE);
         mvwprintw(win, i + 1, 2, "%c %.*s", sel ? '>' : ' ', w - 4, name);
-        if (sel && focused)
-            wattroff(win, A_REVERSE);
+        if (sel && focused) wattroff(win, A_REVERSE);
     }
     wrefresh(win);
-}
-int socket_is_connected(void)
-{
-
-    return (sockfd >= 0);
 }

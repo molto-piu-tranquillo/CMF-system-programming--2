@@ -124,27 +124,40 @@ static bool login_prompt(App *app)
 }
 
 /* =======================================================
-   레이아웃 구성
+   레이아웃 구성 (수정됨: 파일 목록을 우측 상단으로 이동)
    ======================================================= */
 static void layout_create(void)
 {
     int h, w;
     getmaxyx(stdscr, h, w);
-    int left_w = w / 3;
-    int right_w = w - left_w;
-    int chat_h = h - 3;
+    int left_w = w / 3;           // 왼쪽 너비 (디렉토리 목록)
+    int right_w = w - left_w;     // 오른쪽 너비 (파일 + 채팅)
+    
+    int input_h = 3;              // 입력창 높이
+    int file_h = h / 2;           // 파일 목록 높이 (화면 절반)
+    int chat_h = h - file_h - input_h; // 나머지 채팅창
 
-    win_dir = newwin(h / 2, left_w, 0, 0);
-    win_file = newwin(h / 2, left_w, h / 2, 0);
-    win_chat = newwin(chat_h, right_w, 0, left_w);
-    win_input = newwin(3, right_w, chat_h, left_w);
+    // 1. 디렉토리 창 (좌측 전체)
+    win_dir = newwin(h, left_w, 0, 0);
+
+    // 2. 파일 목록 창 (우측 상단)
+    win_file = newwin(file_h, right_w, 0, left_w);
+
+    // 3. 채팅 창 (우측 하단)
+    win_chat = newwin(chat_h, right_w, file_h, left_w);
+
+    // 4. 입력 창 (우측 최하단)
+    win_input = newwin(input_h, right_w, h - input_h, left_w);
 
     box(win_dir, 0, 0);
-    mvwprintw(win_dir, 0, 2, " 현재위치 ");
+    mvwprintw(win_dir, 0, 2, " 디렉토리 ");
+    
     box(win_file, 0, 0);
-    mvwprintw(win_file, 0, 2, " 선택한 디렉토리 ");
+    mvwprintw(win_file, 0, 2, " 파일 목록 ");
+    
     box(win_chat, 0, 0);
     mvwprintw(win_chat, 0, 2, " 채팅 ");
+    
     box(win_input, 0, 0);
     mvwprintw(win_input, 0, 2, " 입력 ");
 
@@ -155,14 +168,14 @@ static void layout_create(void)
 }
 
 /* =======================================================
-   초기화 (시작 시 바로 디렉토리+채팅 표시)
+   초기화
    ======================================================= */
 static void app_init(App *a)
 {
     a->focus = FOCUS_DIR;
 
-    // 시작 디렉토리 지정(🔧 나중에 하드코딩 루트를 바꾸려면 이 값을 수정)
-    const char *start_dir = "/home";
+    // [수정] 시작 디렉토리를 현재 폴더('.')로 변경
+    const char *start_dir = ".";
     char absdir[PATH_MAX];
     abspath(absdir, start_dir);
 
@@ -184,13 +197,11 @@ static void app_init(App *a)
     chat_draw(win_chat, &a->chat);
     input_draw(win_input);
 
-    // 강제 flush
     wrefresh(win_dir);
     wrefresh(win_file);
     wrefresh(win_chat);
     wrefresh(win_input);
 
-    // 상태바 표시
     status_bar(win_chat, "[Tab] 포커스 이동  [Enter] 선택/전송  [Backspace] 상위  [q] 종료");
 }
 
@@ -234,7 +245,7 @@ static void go_parent_dir(App *a)
 {
     char parent[PATH_MAX];
     dirname_of(parent, a->dl.cwd);
-    // 📡 원격/로컬 모두 상위 이동이 가능하도록 유효성 검사 분리
+    
     if (socket_is_connected())
     {
         if (strcmp(parent, a->dl.cwd) == 0)
@@ -269,13 +280,11 @@ static int setup_inotify(const char *path)
 int main(int argc, char *argv[])
 {
 
-    // 호스트는 로컬 루프백으로, 포트는 5050으로 기본경로를 설정
     char host[256] = "127.0.0.1";
     int port = 5050;
 
-    // 그 외에 다른 호스트 주소랑 포트를 사용자가 입력했다면, 그 주소:포트로 기본경로 덮어쓰기
     if (argc >= 3)
-    { // 인자가 3개 이하(예 make run-client 127.0.0.1 9190) -> 형식: host port
+    { 
         strncpy(host, argv[1], sizeof(host) - 1);
         host[sizeof(host) - 1] = '\0';
         int p = atoi(argv[2]);
@@ -283,7 +292,7 @@ int main(int argc, char *argv[])
             port = p;
     }
     else if (argc >= 2)
-    { // 인자가 2개 이하 -> 즉, host[:port] 처럼 호스트, 포트 붙여 보내거나 호스트 ip만 보낼 때
+    { 
         strncpy(host, argv[1], sizeof(host) - 1);
         host[sizeof(host) - 1] = '\0';
         char *colon = strrchr(host, ':');
@@ -308,7 +317,7 @@ int main(int argc, char *argv[])
     cbreak();
     keypad(stdscr, TRUE);
     curs_set(0);
-    timeout(200); // getch() polling 주기
+    timeout(200); 
 
     clear();
     refresh();
@@ -328,7 +337,7 @@ int main(int argc, char *argv[])
     refresh();
     layout_create();
 
-    app_init(&app); // ✅ 실행 즉시 바로 화면 표시
+    app_init(&app);
 
     refresh();
 
@@ -340,7 +349,6 @@ int main(int argc, char *argv[])
 
     for (;;)
     {
-        // 외부 로그 변경 감지
         chat_check_update(&app.chat);
         if (app.chat.dirty)
         {
@@ -410,7 +418,7 @@ int main(int argc, char *argv[])
                 {
                     char tgt[PATH_MAX];
                     path_join(tgt, app.fl.base, app.fl.items[app.fl.selected]);
-                    // 📂 원격일 때는 로컬 파일 검사 대신 바로 이동 시도
+                    
                     if (socket_is_connected() || is_directory(tgt))
                     {
                         dirlist_scan(&app.dl, tgt);
@@ -446,7 +454,6 @@ int main(int argc, char *argv[])
         case FOCUS_INPUT:
             if (ch == '\n')
             {
-                // 빈 줄 방지
             }
             else
             {
@@ -454,15 +461,23 @@ int main(int argc, char *argv[])
                 wmove(win_input, 1, 4);
                 linebuf[0] = '\0';
                 input_capture_line(win_input, linebuf, sizeof(linebuf));
-                //
+                
                 if (strncmp(linebuf, "cd ", 3) == 0 || strncmp(linebuf, "mkdir ", 6) == 0 || strncmp(linebuf, "ls", 2) == 0)
                 {
-
                     socket_send_cmd(linebuf);
 
                     char response[2048];
                     while (socket_recv_response(response, sizeof(response)) > 0)
                     {
+                        // [수정됨] 수동 ls 명령 시 ENDLS를 만나면 루프 종료
+                        if (strstr(response, "ENDLS")) {
+                            char *p = strstr(response, "ENDLS");
+                            *p = '\0'; // 화면에 ENDLS는 출력하지 않음
+                            if (strlen(response) > 0) 
+                                chat_append(&app.chat, "server", response);
+                            break;
+                        }
+
                         chat_append(&app.chat, "server", response);
                         if (strstr(response, "OK") || strstr(response, "ERR"))
                             break;
